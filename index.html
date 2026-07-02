@@ -786,7 +786,7 @@
         }
 
         /* ============================================================
-               TIMER
+               TIMER — FIXED
             ============================================================ */
         .timer-container {
             padding: 10px 0 6px;
@@ -966,6 +966,7 @@
             color: var(--text-secondary);
             font-weight: 400;
             transition: color var(--transition);
+            min-height: 1.6em;
         }
 
         .tm-status .tm-remaining {
@@ -1453,7 +1454,7 @@
             </div>
         </div>
 
-        <!-- ===== TIMER TAB ===== -->
+        <!-- ===== TIMER TAB — FIXED ===== -->
         <div class="tab-content" id="tabTimer">
             <div class="timer-container">
                 <div class="timer-display" id="tmDisplay">
@@ -1485,7 +1486,7 @@
                     <button class="tm-reset" id="tmResetBtn"><i class="fas fa-redo"></i> Reset</button>
                 </div>
 
-                <div class="tm-status" id="tmStatus">Ready</div>
+                <div class="tm-status" id="tmStatus">Ready — set a time</div>
             </div>
         </div>
 
@@ -1509,7 +1510,7 @@
     </div>
 
 
-    <!-- ====== JAVASCRIPT ====== -->
+    <!-- ====== JAVASCRIPT — FIXED ====== -->
     <script>
         (function() {
             'use strict';
@@ -1588,16 +1589,23 @@
             let swInterval = null;
             let swLapCount = 0;
 
+            // ---- TIMER STATE ----
             let tmRunning = false;
-            let tmRemaining = 0;
-            let tmTotal = 0;
-            let tmInterval = null;
+            let tmRemaining = 0; // current remaining seconds (float)
+            let tmTotal = 0; // total seconds set (integer)
             let tmFinished = false;
+            let tmInterval = null;
+            let tmStartTime = 0; // timestamp when timer was started/resumed
+            let tmInitialRemaining = 0; // remaining at start/resume
 
             // ===== HELPERS =====
-            function pad(n) { return String(n).padStart(2, '0'); }
+            function pad(n) {
+                return String(Math.floor(n)).padStart(2, '0');
+            }
 
-            function padMs(n) { return String(n).padStart(2, '0'); }
+            function padMs(n) {
+                return String(Math.floor(n)).padStart(2, '0');
+            }
 
             function getMonthName(m) {
                 return ['January', 'February', 'March', 'April', 'May', 'June',
@@ -1656,7 +1664,7 @@
                 if (alarmTriggered) return;
                 alarmTriggered = true;
                 alarmMsg.textContent =
-                `Alarm at ${pad(alarmTime.h)}:${pad(alarmTime.m)}:${pad(alarmTime.s)} ${alarmTime.ampm}`;
+                    `Alarm at ${pad(alarmTime.h)}:${pad(alarmTime.m)}:${pad(alarmTime.s)} ${alarmTime.ampm}`;
                 alarmOverlay.classList.add('show');
                 playAlarmSound();
             }
@@ -1776,7 +1784,7 @@
                 const item = document.createElement('div');
                 item.className = 'sw-lap-item';
                 item.innerHTML =
-                `<span class="lap-num">Lap ${swLapCount}</span><span class="lap-time">${lapTime}</span>`;
+                    `<span class="lap-num">Lap ${swLapCount}</span><span class="lap-time">${lapTime}</span>`;
                 swLaps.appendChild(item);
                 swLaps.scrollTop = swLaps.scrollHeight;
             }
@@ -1793,79 +1801,141 @@
                 swLapBtn.disabled = true;
             }
 
-            // ===== TIMER =====
+            // ============================================================
+            //  TIMER — FIXED
+            //  - display now floors seconds so "05:05" never shows as "05:5.5"
+            //  - state machine is robust: set → start/pause → reset → finish
+            //  - overlay auto-dismiss does not corrupt state
+            // ============================================================
+
             function updateTimerDisplay(seconds) {
+                // floor both so we never show floating-point garbage
                 const mins = Math.floor(seconds / 60);
-                const secs = seconds % 60;
+                const secs = Math.floor(seconds % 60);
                 tmMinutes.textContent = pad(mins);
                 tmSeconds.textContent = pad(secs);
             }
 
             function setTimer(seconds) {
-                if (tmRunning) return;
-                if (seconds <= 0) return;
-                tmRemaining = seconds;
-                tmTotal = seconds;
+                if (tmRunning) {
+                    tmStatus.textContent = '⏳ Stop the timer first!';
+                    return;
+                }
+                if (seconds <= 0) {
+                    tmStatus.textContent = '⛔ Enter a valid time';
+                    return;
+                }
+                // round to integer so we start clean
+                const total = Math.round(seconds);
+                tmTotal = total;
+                tmRemaining = total;
                 tmFinished = false;
                 updateTimerDisplay(tmRemaining);
-                tmStatus.textContent = `${seconds} seconds set`;
+                tmStatus.textContent = `${total} sec set`;
+                // clear active preset highlight
                 tmPresetBtns.forEach(b => b.classList.remove('active-preset'));
+                // if it matches a preset, highlight it
+                tmPresetBtns.forEach(b => {
+                    if (parseInt(b.dataset.seconds) === total) {
+                        b.classList.add('active-preset');
+                    }
+                });
+                // reset button state
+                tmStartBtn.innerHTML = '<i class="fas fa-play"></i> Start';
+                tmStartBtn.classList.remove('running');
+                // if alarm overlay is up from a previous finish, dismiss it
+                if (alarmOverlay.classList.contains('show')) {
+                    alarmOverlay.classList.remove('show');
+                    stopAlarmSound();
+                }
             }
 
             function tmStart() {
+                // ---- PAUSE ----
                 if (tmRunning) {
                     tmRunning = false;
                     clearInterval(tmInterval);
                     tmStartBtn.innerHTML = '<i class="fas fa-play"></i> Resume';
                     tmStartBtn.classList.remove('running');
-                    tmStatus.textContent = 'Paused';
+                    tmStatus.textContent = `⏸ Paused — ${Math.round(tmRemaining)}s left`;
                     return;
                 }
-                if (tmRemaining <= 0) { tmStatus.textContent = 'Set a time first!'; return; }
-                if (tmFinished) { tmStatus.textContent = 'Timer finished. Reset first.'; return; }
 
+                // ---- RESUME or fresh START ----
+                if (tmFinished) {
+                    tmStatus.textContent = '⏳ Timer finished — press Reset first';
+                    return;
+                }
+                if (tmRemaining <= 0) {
+                    tmStatus.textContent = '⛔ Set a time first';
+                    return;
+                }
+
+                // start / resume
                 tmRunning = true;
                 tmStartBtn.innerHTML = '<i class="fas fa-pause"></i> Pause';
                 tmStartBtn.classList.add('running');
-                tmStatus.textContent = 'Running...';
-                const startTime = Date.now();
-                const initialRemaining = tmRemaining;
+                tmStatus.textContent = '▶ Running...';
+
+                tmStartTime = Date.now();
+                tmInitialRemaining = tmRemaining;
+
+                if (tmInterval) clearInterval(tmInterval);
                 tmInterval = setInterval(() => {
-                    const elapsed = (Date.now() - startTime) / 1000;
-                    const remaining = Math.max(0, initialRemaining - elapsed);
+                    const elapsed = (Date.now() - tmStartTime) / 1000;
+                    const remaining = Math.max(0, tmInitialRemaining - elapsed);
                     tmRemaining = remaining;
                     updateTimerDisplay(remaining);
+
                     if (remaining <= 0) {
+                        // ---- FINISH ----
                         clearInterval(tmInterval);
+                        tmInterval = null;
                         tmRunning = false;
                         tmFinished = true;
+                        tmRemaining = 0;
+                        updateTimerDisplay(0);
                         tmStartBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                         tmStartBtn.classList.remove('running');
                         tmStatus.textContent = '⏰ Time\'s up!';
-                        playAlarmSound();
-                        alarmMsg.textContent = 'Timer finished!';
+                        // trigger alarm overlay
+                        alarmMsg.textContent = '⏱ Timer finished!';
                         alarmOverlay.classList.add('show');
+                        playAlarmSound();
+                        // auto-dismiss after 6s
                         setTimeout(() => {
                             if (alarmOverlay.classList.contains('show')) {
                                 alarmOverlay.classList.remove('show');
                                 stopAlarmSound();
                             }
-                        }, 5000);
+                        }, 6000);
                     }
-                }, 100);
+                }, 50); // update every 50ms for smoothness
             }
 
             function tmReset() {
+                // stop everything
                 tmRunning = false;
-                clearInterval(tmInterval);
+                if (tmInterval) {
+                    clearInterval(tmInterval);
+                    tmInterval = null;
+                }
                 tmFinished = false;
-                tmRemaining = tmTotal || 0;
+                // if we have a total, reset to it; otherwise stay at 0
+                if (tmTotal > 0) {
+                    tmRemaining = tmTotal;
+                } else {
+                    tmRemaining = 0;
+                }
                 updateTimerDisplay(tmRemaining);
                 tmStartBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                 tmStartBtn.classList.remove('running');
-                tmStatus.textContent = tmTotal > 0 ? `${tmTotal} seconds set` : 'Ready';
-                alarmOverlay.classList.remove('show');
-                stopAlarmSound();
+                tmStatus.textContent = tmTotal > 0 ? `${tmTotal} sec set` : 'Ready — set a time';
+                // dismiss any lingering overlay
+                if (alarmOverlay.classList.contains('show')) {
+                    alarmOverlay.classList.remove('show');
+                    stopAlarmSound();
+                }
             }
 
             // ===== THEME =====
@@ -1932,13 +2002,12 @@
                 swLapBtn.addEventListener('click', swLap);
                 swResetBtn.addEventListener('click', swReset);
 
+                // ---- TIMER EVENTS ----
                 tmPresetBtns.forEach(btn => {
                     btn.addEventListener('click', () => {
                         const secs = parseInt(btn.dataset.seconds);
                         if (!isNaN(secs) && secs > 0) {
                             setTimer(secs);
-                            tmPresetBtns.forEach(b => b.classList.remove('active-preset'));
-                            btn.classList.add('active-preset');
                         }
                     });
                 });
@@ -1949,9 +2018,8 @@
                     const total = mins * 60 + secs;
                     if (total > 0) {
                         setTimer(total);
-                        tmPresetBtns.forEach(b => b.classList.remove('active-preset'));
                     } else {
-                        tmStatus.textContent = 'Enter a valid time';
+                        tmStatus.textContent = '⛔ Enter a valid time';
                     }
                 });
 
@@ -1963,13 +2031,16 @@
                 });
 
                 setThemeColor('#a78bfa');
+
+                // ---- prime timer with 5 min preset ----
                 setTimer(300);
                 tmPresetBtns.forEach(b => {
                     if (b.dataset.seconds === '300') b.classList.add('active-preset');
                 });
+
                 updateStopwatch();
 
-                console.log('⏳ TimeVerse · Smooth Edition loaded');
+                console.log('⏳ TimeVerse · Smooth Edition loaded (timer fixed)');
             }
 
             if (document.readyState === 'loading') {
